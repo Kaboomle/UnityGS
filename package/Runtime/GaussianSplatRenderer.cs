@@ -142,6 +142,10 @@ namespace GaussianSplatting.Runtime
                 mpb.SetBuffer(GaussianSplatRenderer.Props.OrderBuffer, gs.m_GpuSortKeys);
                 mpb.SetFloat(GaussianSplatRenderer.Props.SplatScale, gs.m_SplatScale);
                 mpb.SetFloat(GaussianSplatRenderer.Props.SplatOpacityScale, gs.m_OpacityScale);
+                mpb.SetFloat("_ShowGaussianOutlines", gs.asset.showOutlines ? 1 : 0);
+                mpb.SetColor("_GaussianOutlineColor", gs.asset.outlineColor);
+                mpb.SetFloat("_GaussianOutlineWidth", gs.asset.outlineWidth);
+                mpb.SetFloat("_GaussianOutlineRadius", gs.asset.outlineRadius);
                 mpb.SetFloat(GaussianSplatRenderer.Props.SplatSize, gs.m_PointDisplaySize);
                 mpb.SetInteger(GaussianSplatRenderer.Props.SHOrder, gs.m_SHOrder);
                 mpb.SetInteger(GaussianSplatRenderer.Props.SHOnly, gs.m_SHOnly ? 1 : 0);
@@ -257,6 +261,42 @@ namespace GaussianSplatting.Runtime
         GraphicsBuffer m_GpuOtherData;
         GraphicsBuffer m_GpuSHData;
         Texture m_GpuColorData;
+        GraphicsBuffer m_GpuColorMarks;
+        int m_ColorMarksRevision = -1;
+
+        void UpdateColorMarks()
+        {
+            if (m_GpuColorMarks != null && m_ColorMarksRevision == asset.markingRevision &&
+                m_GpuColorMarks.count == m_SplatCount) return;
+            DisposeBuffer(ref m_GpuColorMarks);
+            var data = new uint[m_SplatCount];
+            // Geometry edits can change index identity; do not apply annotations to resized data.
+            if (m_SplatCount == asset.splatCount)
+                foreach (var mark in asset.colorMarks)
+                {
+                    if (mark.index < 0 || mark.index >= data.Length) continue;
+                    var c = mark.color;
+                    data[mark.index] = (uint)c.r | ((uint)c.g << 8) | ((uint)c.b << 16) | 0xff000000u;
+                }
+            m_GpuColorMarks = new GraphicsBuffer(GraphicsBuffer.Target.Structured, data.Length, 4);
+            m_GpuColorMarks.SetData(data);
+            m_ColorMarksRevision = asset.markingRevision;
+        }
+
+        public int[] GetSelectedSplatIndices()
+        {
+            if (!EnsureEditingBuffers()) return Array.Empty<int>();
+            var selected = new uint[m_GpuEditSelected.count];
+            var deleted = new uint[m_GpuEditDeleted.count];
+            m_GpuEditSelected.GetData(selected);
+            m_GpuEditDeleted.GetData(deleted);
+            var indices = new List<int>();
+            for (int i = 0; i < m_SplatCount; ++i)
+                if (((selected[i / 32] & ~deleted[i / 32]) & (1u << (i & 31))) != 0)
+                    indices.Add(i);
+            return indices.ToArray();
+        }
+
         internal GraphicsBuffer m_GpuChunks;
         internal bool m_GpuChunksValid;
         internal GraphicsBuffer m_GpuView;
@@ -493,6 +533,8 @@ namespace GaussianSplatting.Runtime
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatOther, m_GpuOtherData);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatSH, m_GpuSHData);
             cmb.SetComputeTextureParam(cs, kernelIndex, Props.SplatColor, m_GpuColorData);
+            cmb.SetComputeIntParam(cs, "_OpacityFilterEnabled", asset.opacityFilterEnabled ? 1 : 0);
+            cmb.SetComputeVectorParam(cs, "_OpacityRange", new Vector4(asset.opacityMin, asset.opacityMax, 0, 0));
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatSelectedBits, m_GpuEditSelected ?? m_GpuPosData);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatDeletedBits, m_GpuEditDeleted ?? m_GpuPosData);
             cmb.SetComputeBufferParam(cs, kernelIndex, Props.SplatViewData, m_GpuView);
@@ -533,6 +575,8 @@ namespace GaussianSplatting.Runtime
         void DisposeResourcesForAsset()
         {
             DestroyImmediate(m_GpuColorData);
+            DisposeBuffer(ref m_GpuColorMarks);
+            m_ColorMarksRevision = -1;
 
             DisposeBuffer(ref m_GpuPosData);
             DisposeBuffer(ref m_GpuOtherData);
@@ -590,6 +634,10 @@ namespace GaussianSplatting.Runtime
             int eyeW = XRSettings.eyeTextureWidth, eyeH = XRSettings.eyeTextureHeight;
             Vector4 screenPar = new Vector4(eyeW != 0 ? eyeW : screenW, eyeH != 0 ? eyeH : screenH, 0, 0);
             Vector4 camPos = cam.transform.position;
+
+            UpdateColorMarks();
+            cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcViewData, "_SplatColorMarks", m_GpuColorMarks);
+            cmb.SetComputeIntParam(m_CSSplatUtilities, "_ForceOpaque", asset.forceOpaque ? 1 : 0);
 
             // calculate view dependent data for each splat
             SetAssetDataOnCS(cmb, KernelIndices.CalcViewData);

@@ -31,6 +31,10 @@ struct v2f
 StructuredBuffer<SplatViewData> _SplatViewData;
 ByteAddressBuffer _SplatSelectedBits;
 uint _SplatBitsValid;
+float _ShowGaussianOutlines;
+float4 _GaussianOutlineColor;
+float _GaussianOutlineWidth;
+float _GaussianOutlineRadius;
 
 v2f vert (uint vtxID : SV_VertexID, uint instID : SV_InstanceID)
 {
@@ -100,10 +104,22 @@ half4 frag (v2f i) : SV_Target
 		i.col.rgb = lerp(i.col.rgb, selectedColor, 0.5);
 	}
 	
-    if (alpha < 1.0/255.0)
-        discard;
-
     half4 res = half4(i.col.rgb * alpha, alpha);
+    if (_ShowGaussianOutlines > 0.5)
+    {
+        // A Gaussian has no hard edge: draw a configurable iso-radius ellipse.
+        // Screen derivatives keep the inward stroke approximately pixel-sized.
+        float radius = length(i.pos);
+        float gradient = max(length(float2(ddx(radius), ddy(radius))), 1e-5);
+        float inwardPixels = (_GaussianOutlineRadius - radius) / gradient;
+        float coverage = smoothstep(-0.5, 0.5, inwardPixels) *
+            (1.0 - smoothstep(_GaussianOutlineWidth - 0.5, _GaussianOutlineWidth + 0.5, inwardPixels));
+        half lineAlpha = saturate(coverage * _GaussianOutlineColor.a);
+        res.rgb = _GaussianOutlineColor.rgb * lineAlpha + res.rgb * (1 - lineAlpha);
+        res.a = lineAlpha + res.a * (1 - lineAlpha);
+    }
+    if (res.a < 1.0/255.0)
+        discard;
     return res;
 }
 ENDCG

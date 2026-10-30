@@ -36,6 +36,7 @@ namespace GaussianSplatting.Editor
         SerializedProperty m_PropShaderDebugBoxes;
         SerializedProperty m_PropCSSplatUtilities;
 
+        Color m_MarkingColor = Color.red;
         bool m_ResourcesExpanded = false;
         int m_CameraIndex = 0;
 
@@ -139,6 +140,7 @@ namespace GaussianSplatting.Editor
             {
                 EditCameras(gs);
                 EditGUI(gs);
+                MarkingGUI(gs);
             }
             if (validAndEnabled && targets.Length > 1)
             {
@@ -146,6 +148,86 @@ namespace GaussianSplatting.Editor
             }
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        void MarkingGUI(GaussianSplatRenderer gs)
+        {
+            EditorGUILayout.Space();
+            GUILayout.Label("Floater Marking (Persistent)", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("In Play or Edit Mode: enable Edit above, then drag a rectangle in Scene view. Shift adds; Ctrl subtracts. Selection includes overlapping centers at every depth. Marks are saved to the shared GS asset and survive Play Mode. Splat rendering only; PLY export is unchanged.", MessageType.Info);
+            var asset = gs.asset;
+            bool opaque = EditorGUILayout.Toggle("Force Opacity to 1", asset.forceOpaque);
+            if (opaque != asset.forceOpaque)
+            {
+                Undo.RecordObject(asset, "Change Gaussian opacity override");
+                asset.SetForceOpaque(opaque);
+                SaveMarkingAsset(asset);
+            }
+            EditorGUI.BeginChangeCheck();
+            bool filter = EditorGUILayout.Toggle("Filter by Opacity", asset.opacityFilterEnabled);
+            float min = asset.opacityMin, max = asset.opacityMax;
+            using (new EditorGUI.DisabledScope(!filter))
+            {
+                min = EditorGUILayout.Slider("Minimum Opacity", min, 0, 1);
+                max = EditorGUILayout.Slider("Maximum Opacity", max, min, 1);
+            }
+            if (EditorGUI.EndChangeCheck())
+            {
+                Undo.RecordObject(asset, "Change Gaussian opacity filter");
+                asset.SetOpacityFilter(filter, min, max);
+                gs.EditDeselectAll();
+                SaveMarkingAsset(asset);
+            }
+            if (filter)
+                EditorGUILayout.HelpBox("Shows splats whose original opacity is within the inclusive range, before Force Opacity to 1 or Opacity Scale. Hidden splats are excluded from new selections.", MessageType.Info);
+            EditorGUILayout.Space();
+            EditorGUI.BeginChangeCheck();
+            bool outlines = EditorGUILayout.Toggle("Show Gaussian Outlines", asset.showOutlines);
+            Color outlineColor = asset.outlineColor;
+            float outlineWidth = asset.outlineWidth, outlineRadius = asset.outlineRadius;
+            using (new EditorGUI.DisabledScope(!outlines))
+            {
+                outlineColor = EditorGUILayout.ColorField("Outline Color", outlineColor);
+                outlineWidth = EditorGUILayout.Slider("Outline Width (px)", outlineWidth, 0.5f, 8);
+                outlineRadius = EditorGUILayout.Slider(new GUIContent("Outline Radius", "Ellipse radius in Gaussian coordinates. The rendered quad extends to 2. The line is drawn inward from this radius."), outlineRadius, 0.25f, 1.95f);
+            }
+            if (EditorGUI.EndChangeCheck())
+            {
+                Undo.RecordObject(asset, "Change Gaussian outlines");
+                asset.SetOutlines(outlines, outlineColor, outlineWidth, outlineRadius);
+                SaveMarkingAsset(asset);
+            }
+            if (asset.hasStaleMarks)
+                EditorGUILayout.HelpBox("GS data changed. Old color marks are ignored.", MessageType.Warning);
+            EditorGUILayout.LabelField("Saved color marks", asset.colorMarks.Length.ToString());
+            EditorGUILayout.LabelField("Selected splats", gs.editSelectedSplats.ToString());
+            m_MarkingColor = EditorGUILayout.ColorField("Mark Color", m_MarkingColor);
+            using (new EditorGUI.DisabledScope(gs.editSelectedSplats == 0 || gs.splatCount != asset.splatCount))
+            {
+                if (GUILayout.Button("Save Color to Selected")) SaveSelectedMarks(gs, false);
+                if (GUILayout.Button("Restore Original Color of Selected")) SaveSelectedMarks(gs, true);
+            }
+            if (GUILayout.Button("Deselect (Show Saved Colors)"))
+            {
+                gs.EditDeselectAll();
+                SceneView.RepaintAll();
+            }
+        }
+
+        void SaveSelectedMarks(GaussianSplatRenderer gs, bool remove)
+        {
+            Undo.RecordObject(gs.asset, "Mark Gaussian colors");
+            gs.asset.SetColorMarks(gs.GetSelectedSplatIndices(), m_MarkingColor, remove);
+            SaveMarkingAsset(gs.asset);
+            gs.EditDeselectAll();
+        }
+
+        static void SaveMarkingAsset(GaussianSplatAsset asset)
+        {
+            EditorUtility.SetDirty(asset);
+            AssetDatabase.SaveAssetIfDirty(asset);
+            SceneView.RepaintAll();
+            EditorApplication.QueuePlayerLoopUpdate();
         }
 
         void EditCameras(GaussianSplatRenderer gs)

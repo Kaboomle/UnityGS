@@ -85,6 +85,15 @@ RWStructuredBuffer<SplatViewData> _SplatViewData;
 
 float _SplatScale;
 float _SplatOpacityScale;
+uint _ForceOpaque;
+uint _OpacityFilterEnabled;
+float4 _OpacityRange;
+
+bool IsOpacityFiltered(float opacity)
+{
+    return _OpacityFilterEnabled != 0 && (opacity < _OpacityRange.x || opacity > _OpacityRange.y);
+}
+StructuredBuffer<uint> _SplatColorMarks;
 uint _SHOrder;
 uint _SHOnly;
 
@@ -219,6 +228,9 @@ void CSCalcViewData (uint3 id : SV_DispatchThreadID)
         centerClipPos.w = 0;
     }
 
+    if (IsOpacityFiltered(splat.opacity))
+        centerClipPos.w = 0;
+
     view.pos = centerClipPos;
     bool behindCam = centerClipPos.w <= 0;
     if (!behindCam)
@@ -243,7 +255,10 @@ void CSCalcViewData (uint3 id : SV_DispatchThreadID)
 
         half4 col;
         col.rgb = ShadeSH(splat.sh, objViewDir, _SHOrder, _SHOnly != 0);
-        col.a = min(splat.opacity * opacityScale, 65000);
+        uint mark = _SplatColorMarks[idx];
+        if ((mark >> 24) != 0)
+            col.rgb = float3(mark & 255, (mark >> 8) & 255, (mark >> 16) & 255) / 255.0;
+        col.a = _ForceOpaque ? 1.0 : min(splat.opacity * opacityScale, 65000);
         view.color.x = (f32tof16(col.r) << 16) | f32tof16(col.g);
         view.color.y = (f32tof16(col.b) << 16) | f32tof16(col.a);
     }
@@ -348,7 +363,7 @@ void CSInvertSelection (uint3 id : SV_DispatchThreadID)
     for (uint sidx = splatIndices.x; sidx < splatIndices.y; ++sidx, mask <<= 1)
     {
         float3 spos = LoadSplatPos(sidx);
-        if (IsSplatCut(spos))
+        if (IsSplatCut(spos) || IsOpacityFiltered(LoadSplatData(sidx).opacity))
             v &= ~mask;
     }
 
@@ -369,7 +384,7 @@ void CSSelectAll (uint3 id : SV_DispatchThreadID)
     for (uint sidx = splatIndices.x; sidx < splatIndices.y; ++sidx, mask <<= 1)
     {
         float3 spos = LoadSplatPos(sidx);
-        if (IsSplatCut(spos))
+        if (IsSplatCut(spos) || IsOpacityFiltered(LoadSplatData(sidx).opacity))
             v &= ~mask;
     }
 
@@ -398,7 +413,7 @@ void CSSelectionUpdate (uint3 id : SV_DispatchThreadID)
         return;
 
     float3 pos = LoadSplatPos(idx);
-    if (IsSplatCut(pos))
+    if (IsSplatCut(pos) || IsOpacityFiltered(LoadSplatData(idx).opacity))
         return;
 
     float3 centerWorldPos = mul(_MatrixObjectToWorld, float4(pos,1)).xyz;

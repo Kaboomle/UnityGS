@@ -21,6 +21,84 @@ namespace GaussianSplatting.Runtime
         [SerializeField] Vector3 m_BoundsMax;
         [SerializeField] Hash128 m_DataHash;
 
+        [Serializable]
+        public struct ColorMark
+        {
+            public int index;
+            public Color32 color;
+        }
+
+        [SerializeField] bool m_ForceOpaque;
+        [SerializeField] bool m_OpacityFilterEnabled;
+        [SerializeField, Range(0, 1)] float m_OpacityMin;
+        [SerializeField, Range(0, 1)] float m_OpacityMax = 1;
+        public bool opacityFilterEnabled => m_OpacityFilterEnabled;
+        public float opacityMin => Mathf.Clamp01(m_OpacityMin);
+        public float opacityMax => Mathf.Max(opacityMin, Mathf.Clamp01(m_OpacityMax));
+
+        public void SetOpacityFilter(bool enabled, float min, float max)
+        {
+            m_OpacityFilterEnabled = enabled;
+            m_OpacityMin = Mathf.Clamp01(min);
+            m_OpacityMax = Mathf.Clamp(max, m_OpacityMin, 1);
+        }
+
+        [SerializeField] bool m_ShowOutlines;
+        [SerializeField] Color m_OutlineColor = Color.cyan;
+        [SerializeField, Range(0.5f, 8)] float m_OutlineWidth = 1.5f;
+        [SerializeField, Range(0.25f, 1.95f)] float m_OutlineRadius = 1.8f;
+        public bool showOutlines => m_ShowOutlines;
+        public Color outlineColor => m_OutlineColor;
+        public float outlineWidth => Mathf.Clamp(m_OutlineWidth, 0.5f, 8);
+        public float outlineRadius => Mathf.Clamp(m_OutlineRadius, 0.25f, 1.95f);
+
+        public void SetOutlines(bool enabled, Color color, float width, float radius)
+        {
+            m_ShowOutlines = enabled;
+            m_OutlineColor = color;
+            m_OutlineWidth = Mathf.Clamp(width, 0.5f, 8);
+            m_OutlineRadius = Mathf.Clamp(radius, 0.25f, 1.95f);
+        }
+
+        [SerializeField] Hash128 m_MarkingHash;
+        [SerializeField] ColorMark[] m_ColorMarks = Array.Empty<ColorMark>();
+        [NonSerialized] int m_MarkingRevision;
+        public bool forceOpaque => m_ForceOpaque;
+        public int markingRevision => m_MarkingRevision;
+        public bool markingsMatch => m_MarkingHash == m_DataHash;
+        public ColorMark[] colorMarks => markingsMatch ? m_ColorMarks : Array.Empty<ColorMark>();
+        public bool hasStaleMarks => !markingsMatch && m_ColorMarks.Length != 0;
+
+        void OnValidate() { ++m_MarkingRevision; }
+
+        public void SetForceOpaque(bool value)
+        {
+            m_ForceOpaque = value;
+            ++m_MarkingRevision;
+        }
+
+        public void SetColorMarks(int[] indices, Color color, bool remove)
+        {
+            var marks = new System.Collections.Generic.Dictionary<int, Color32>();
+            foreach (var mark in colorMarks)
+                marks[mark.index] = mark.color;
+            Color32 packed = color;
+            packed.a = 255;
+            foreach (int index in indices)
+            {
+                if (index < 0 || index >= m_SplatCount) continue;
+                if (remove) marks.Remove(index);
+                else marks[index] = packed;
+            }
+            m_ColorMarks = new ColorMark[marks.Count];
+            int i = 0;
+            foreach (var mark in marks)
+                m_ColorMarks[i++] = new ColorMark { index = mark.Key, color = mark.Value };
+            Array.Sort(m_ColorMarks, (a, b) => a.index.CompareTo(b.index));
+            m_MarkingHash = m_DataHash;
+            ++m_MarkingRevision;
+        }
+
         public int formatVersion => m_FormatVersion;
         public int splatCount => m_SplatCount;
         public Vector3 boundsMin => m_BoundsMin;
